@@ -1,0 +1,1 @@
+// Contens of file 'bar.js'
