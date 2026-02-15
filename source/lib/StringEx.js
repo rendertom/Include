@@ -1,15 +1,22 @@
-var StringEx = (function() {
-	var module = {};
+var StringEx = (function () {
+  var module = {};
 
-	module.mapLines = function(string, callback) {
-		return ArrayEx.map(module.splitLines(string), function(line, i, lines) {
-			return callback(line, i, lines, string);
-		}).join('\n');
-	};
+  module.getLeadingWhitespaces = function (string) {
+    var match = string.match(/^\s*/);
+    return match ? match[0] : '';
+  };
 
-	module.splitLines = function(string) {
-		return string.split(/\r?\n/);
-	};
+  module.hasTrailingNewline = function (string) {
+    return /\r?\n$/.test(string);
+  };
 
-	return module;
+  module.splitLines = function (string) {
+    return string.split(/\r?\n/);
+  };
+
+  module.trim = function (string) {
+    return string.replace(/^\s+/, '').replace(/\s+$/, '');
+  };
+
+  return module;
 })();

@@ -1,1 +1,0 @@
-// Contens of file 'foo.js'

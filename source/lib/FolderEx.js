@@ -1,21 +1,21 @@
-var FolderEx = (function() {
-	var module = {};
+var FolderEx = (function () {
+  var module = {};
 
-	module.ensureFolderExists = function(folder) {
-		folder = module.getFolderObject(folder);
+  module.ensureFolderExists = function (folder) {
+    folder = module.getFolderObject(folder);
 
-		if (!folder.exists) {
-			if (!folder.create()) {
-				throw new Error('Could not create folder ' + folder.fsName);
-			}
-		}
+    if (!folder.exists) {
+      if (!folder.create()) {
+        throw new Error('Could not create folder ' + folder.fsName);
+      }
+    }
 
-		return folder;
-	};
+    return folder;
+  };
 
-	module.getFolderObject = function(folder) {
-		return (folder instanceof Folder) ? folder : new Folder(folder);
-	};
+  module.getFolderObject = function (folder) {
+    return folder instanceof Folder ? folder : new Folder(folder);
+  };
 
-	return module;
+  return module;
 })();

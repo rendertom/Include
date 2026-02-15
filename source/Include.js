@@ -1,162 +1,236 @@
-var Include = (function() {
+var Include = (function () {
 
-	// @include 'lib/ArrayEx.js'
-	// @include 'lib/FileEx.js'
-	// @include 'lib/FolderEx.js'
-	// @include 'lib/ObjectEx.js'
-	// @include 'lib/StringEx.js'
+  // @include 'lib/ArrayEx.js'
+  // @include 'lib/FileEx.js'
+  // @include 'lib/FolderEx.js'
+  // @include 'lib/ObjectEx.js'
+  // @include 'lib/StringEx.js'
 
-	var includedFiles, module, options, patterns;
+  var cache = {};
+  var includedFiles = [];
+  var includePaths = [];
+  var stack = {};
 
-	module = {};
+  var options = {
+    addTrailingLineBreak: true,
+    indentIncludedContent: true,
+    saveFilePath: '',
+    skipFiles: [],
+  };
 
-	options = {
-		addTrailingLineBrake: true,
-		indentIncludedContent: true,
-		saveFilePath: '',
-		skipFiles: [],
-	};
+  var module = {};
 
-	patterns = {
-		includeDirective: /^\s*(\/\/\s*@|#)include\s*['"]/m,
-		indentation: /^\s*/,
-		nonWhiteCharacter: /\S/,
-		quotedString: /['"](.*?)['"]/,
-		trailingLineBreak: /(\r|\n)$/,
-	};
+  /**
+   * Includes contents of all files referenced in `#include`, `// @include`, `#includepath`, or `// @includepath` preprocessor directives.
+   * The `includepath` directive defines one or more additional folders (semicolon-separated) that are searched when resolving subsequent
+   * `include` directives within the same file.
+   *
+   * @param {string|File} file Path to a file to be processed.
+   * @param {Object} [userOptions={}] Optional object with user defined parameters.
+   * @param {Boolean} [userOptions.addTrailingLineBreak=true] Adds trailing line break after including the content of a file. Optional, defaults to `true`.
+   * @param {Boolean} [userOptions.indentIncludedContent=true] Adds indentation level of source include directive. Optional, defaults to `true`.
+   * @param {string} [userOptions.saveFilePath=''] Path to file to save final content. If not specified, saves new file with prefix '_included.js'. Option is ignored if callback is provided.
+   * @param {Array} [userOptions.skipFiles=[]] List of file names with extension that shouldn't be included.
+   * @param {Function} [callback] Optional callback function that receives two parameters: final content and a list of included file paths.
+   * @return {File|*} File object. If callback is defined, then returns the result of callback function.
+   */
+  module.process = function (file, userOptions, callback) {
+    cache = {};
+    includedFiles = [];
+    includePaths = [];
+    stack = {};
 
-	/**
-	 * Includes contents of all files, referenced in `#include` or `// @include` preprocessor directives.
-	 * 
-	 * @param  {String|File} 	file 								Path to a file to be processed.
-	 * @param  {[Object]}		userOptions							Optional object with user defined parameters.
-	 * @param  {[Boolean]}		userOptions.addTrailingLineBrake 	Adds trailing line brake after including the content of a file. Optional, defaults to `true`.
-	 * @param  {[Boolean]}		userOptions.indentIncludedContent 	Adds indentation level of sources include directive. Optional, defaults to `true`.
-	 * @param  {[String]}		userOptions.saveFilePath 			Path to file to save final content. If not speficied, saves new file with prefix '_included.js'. Option is ignored if callback is provided.
-	 * @param  {[Array]}		userOptions.skipFiles 				List of file names with extension that shouldn't be included.
-	 * @param  {[Function]} 	callback							Optional callback function that receives two parameters: final content and a list of included file paths.
-	 * @return {[File]}												File object. If callback is defined, then returns the result of callback function.
-	 */
-	module.process = function(file, userOptions, callback) {
-		includedFiles = [];
-		ObjectEx.assign(options, userOptions);
+    ObjectEx.assign(options, userOptions);
 
-		var content = replaceIncludeDirectivesInFile(file);
-		if (callback && isFunction(callback)) {
-			return callback(content, includedFiles);
-		} else {
-			return saveContent(file, content);
-		}
-	};
+    var content = handleInclude(file);
 
-	return module;
+    return typeof callback === 'function'
+      ? callback(content, includedFiles)
+      : saveContent(file, content);
+  };
 
+  return module;
 
+  ///
 
-	function addTrailingLineBrake(content) {
-		if (!patterns.trailingLineBreak.test(content)) {
-			content += '\n';
-		}
+  /**
+   * @param {string|File} file
+   * @returns {string}
+   */
+  function handleInclude(file) {
+    file = FileEx.getFileObject(file);
 
-		return content;
-	}
+    if (!file.exists) {
+      throw 'File does not exist at path ' + file.fsName;
+    }
 
-	function hasIncludeDirective(string) {
-		return patterns.includeDirective.test(string);
-	}
+    if (stack[file.fsName]) {
+      throw 'Circular include detected: ' + file.fsName;
+    }
 
-	function indentContent(line, content) {
-		var indentation = line.match(patterns.indentation);
-		if (indentation[0] !== '') {
-			content = StringEx.mapLines(content, function(line) {
-				if (patterns.nonWhiteCharacter.test(line)) {
-					line = indentation[0] + line;
-				}
+    if (cache[file.fsName]) {
+      return cache[file.fsName];
+    }
 
-				return line;
-			});
-		}
-		return content;
-	}
+    stack[file.fsName] = true;
 
-	function isFunction(value) {
-		return typeof value === 'function';
-	}
+    var content = FileEx.read(file);
+    var lines = StringEx.splitLines(content);
 
-	function replaceIncludeDirectivesInFile(file) {
-		file = FileEx.getFileObject(file);
-		if (!file.exists) {
-			throw 'File does not exist at path ' + file.fsName;
-		}
+    var processedLines = [];
+    ArrayEx.forEach(lines, function (line) {
+      var result = processLine(file, line);
+      if (result !== null) {
+        processedLines.push(result);
+      }
+    });
 
-		var content = FileEx.read(file);
+    var result = processedLines.join('\n');
 
-		if (hasIncludeDirective(content)) {
-			content = StringEx.mapLines(content, function(line) {
-				if (!hasIncludeDirective(line)) {
-					return line;
-				}
+    if (StringEx.hasTrailingNewline(content)) {
+      result += '\n';
+    }
 
-				Folder.current = file.parent;
-				return replaceLineWithIncludedFileContent(line);
-			});
-		}
+    cache[file.fsName] = result;
+    delete stack[file.fsName];
 
-		return content;
-	}
+    return result;
+  }
 
-	function replaceLineWithIncludedFileContent(line) {
-		var content, filePath;
+  /**
+   * @param {File} file
+   * @param {string} path
+   */
+  function handleIncludepath(file, path) {
+    var paths = path.split(';');
+    ArrayEx.forEach(paths, function (path) {
+      path = StringEx.trim(path);
+      if (!path) return;
 
-		filePath = line.match(patterns.quotedString)[1];
+      var folder = new Folder(file.parent.fsName + '/' + path);
 
-		if (shouldSkipFile(filePath)) {
-			return line;
-		}
+      if (!folder.exists) {
+        throw ('The directory "' + path + '" does not exist.' + '\n' +
+          'Referenced in: ' + file.fsName
+        );
+      }
 
-		content = replaceIncludeDirectivesInFile(filePath);
+      if (!ArrayEx.includes(includePaths, folder.fsName)) {
+        includePaths.push(folder.fsName);
+      }
+    });
+  }
 
-		if (options.indentIncludedContent) {
-			content = indentContent(line, content);
-		}
+  /**
+   * @param {string} content
+   * @param {string} line
+   * @returns {string}
+   */
+  function handleIndentation(content, line) {
+    var indent = StringEx.getLeadingWhitespaces(line);
+    var lines = StringEx.splitLines(content);
+    var minIndent = Infinity;
 
-		if (options.addTrailingLineBrake) {
-			content = addTrailingLineBrake(content);
-		}
+    ArrayEx.forEach(lines, function (line) {
+      if (StringEx.trim(line)) {
+        var candidate = StringEx.getLeadingWhitespaces(line).length;
+        minIndent = Math.min(minIndent, candidate);
+      }
+    });
 
-		includedFiles.push(Folder.current.fsName + '/' + filePath);
+    if (minIndent === Infinity) minIndent = 0;
 
-		return content;
-	}
+    ArrayEx.forEach(lines, function (line, index) {
+      if (StringEx.trim(line)) {
+        lines[index] = indent + line.substr(minIndent);
+      }
+    });
 
-	function saveContent(file, content) {
-		var saveFilePath = getSaveFilePath(file);
-		if (options.saveFilePath && options.saveFilePath !== '') {
-			saveFilePath = new File(options.saveFilePath);
-		}
+    var result = lines.join('\n');
 
-		return FileEx.write(saveFilePath, content);
+    if (StringEx.hasTrailingNewline(content)) {
+      result += '\n';
+    }
 
+    return result;
+  }
 
+  /**
+   * @param {File} file
+   * @param {string} line
+   * @returns {string|null}
+   */
+  function processLine(file, line) {
+    var includepathMatch = line.match(/^\s*(?:\/\/\s*@|#)includepath\s+(['"])(.*?)\1/);
+    if (includepathMatch) {
+      handleIncludepath(file, includepathMatch[2]);
+      return null;
+    }
 
-		function getSaveFilePath(file) {
-			var baseName, extension, folder;
+    var includeMatch = line.match(/^\s*(?:\/\/\s*@|#)include\s+(['"])(.*?)\1/);
+    if (includeMatch) {
+      return replaceLineWithIncludedFileContent(file, includeMatch[2], line);
+    }
 
-			file = FileEx.getFileObject(file);
-			folder = file.parent.fsName;
-			baseName = FileEx.getBaseName(file);
-			extension = FileEx.getExtension(file);
+    return line;
+  }
 
-			return folder + '/' + baseName + '_included.' + extension;
-		}
-	}
+  /**
+   * @param {File} file
+   * @param {string} path
+   * @param {string} line
+   * @returns {string}
+   */
+  function replaceLineWithIncludedFileContent(file, path, line) {
+    var includedFile = resolveIncludeFilePath(file, path);
 
-	function shouldSkipFile(filePath) {
-		var file, fileName;
+    if (ArrayEx.includes(options.skipFiles, File.decode(includedFile.name))) {
+      return '// skipped include: ' + path;
+    }
 
-		file = FileEx.getFileObject(filePath);
-		fileName = File.decode(file.name);
+    var content = handleInclude(includedFile);
 
-		return options.skipFiles && ArrayEx.includes(options.skipFiles, fileName);
-	}
+    if (options.indentIncludedContent) {
+      content = handleIndentation(content, line);
+    }
+
+    if (options.addTrailingLineBreak && !StringEx.hasTrailingNewline(content)) {
+      content += '\n';
+    }
+
+    includedFiles.push(includedFile.fsName);
+
+    return content;
+  }
+
+  /**
+   * @param {File} file
+   * @param {string} path
+   */
+  function resolveIncludeFilePath(file, path) {
+    var candidate = new File(file.parent.fsName + '/' + path);
+    if (candidate.exists) return candidate;
+
+    for (var i = 0, il = includePaths.length; i < il; i++) {
+      candidate = new File(includePaths[i] + '/' + path);
+      if (candidate.exists) return candidate;
+    }
+
+    throw ('Include file not found: ' + path + '\n' +
+      'Referenced from: ' + file.fsName
+    );
+  }
+
+  /**
+   * @param {string|File} file
+   * @param {string} content
+   */
+  function saveContent(file, content) {
+    file = FileEx.getFileObject(file);
+
+    var saveFilePath = options.saveFilePath ||
+      file.parent.fsName + '/' + FileEx.getBaseName(file) + '_included.' + FileEx.getExtension(file);
+
+    return FileEx.write(saveFilePath, content);
+  }
 })();
